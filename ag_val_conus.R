@@ -13,15 +13,17 @@ library(ggmap)
 library(usmap)
 library(fasterize)
 
-#us.county <- counties(state = NULL, cb = FALSE, resolution = "500k", year = NULL)
-us <- states()
-states <-  us%>% filter(!STATEFP %in%  c("02", "60", "66", "69", "72", "78", "15"))
-states<-st_transform(states,st_crs(albers))
-#us.counties <- st_join(us.county, us)
-
-# bring in shapefile of US counties and select to conus
-US.County <- read_sf("/Users/jamiefaselt/Resistance-Surfaces/Data/cb_2018_us_county_20m/cb_2018_us_county_20m.shp")
+#this is a projection I'm using from the wildlife pref repo
 albers <- "+proj=aea +lat_1=20 +lat_2=60 +lat_0=40 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs"
+
+
+#bring in states shapefile and filter to conus
+states <- read_sf("/Users/jamiefaselt/Resistance-Surfaces/Data/cb_2018_us_state_5m (1)/cb_2018_us_state_5m.shp")
+states <-  states%>% filter(!STATEFP %in%  c("02", "60", "66", "69", "72", "78", "15"))
+states<-st_transform(states,st_crs(albers))
+
+# bring in shapefile of US counties and filter to conus
+US.County <- read_sf("/Users/jamiefaselt/Resistance-Surfaces/Data/cb_2018_us_county_20m/cb_2018_us_county_20m.shp")
 #filter out AK , Guam, etc 
 US.County<-US.County %>% filter(!STATEFP %in%  c("02", "60", "66", "69", "72", "78", "15"))
 US.County<-st_transform(US.County,st_crs(albers))
@@ -36,7 +38,7 @@ st_crs(states)==st_crs(US.County) #true
 conuscounties <- st_join(US.County, states) #this has duplicates
 
 #drop duplicates
-us.counties <- distinct(conuscounties, GEOID.x, .keep_all = TRUE) #this seems to have worked
+us.counties <- distinct(conuscounties, COUNTYNS, .keep_all = TRUE) #this seems to have worked
 
 # make columns match to ag.val
 us.counties$NAME.y <- toupper(us.counties$NAME.y)
@@ -65,6 +67,7 @@ ag.val.sub <- agval.spatial %>%
 # str(ag.val.sub)
 plot(ag.val.sub) # this and regular agval.spat plot with gaps
 
+#create temp raster to make agval a raster
 poly <- st_as_sfc(st_bbox(c(xmin = st_bbox(us.counties)[[1]], xmax = st_bbox(us.counties)[[3]], ymax = st_bbox(us.counties)[[4]], ymin = st_bbox(us.counties)[[2]]), crs = st_crs(us.counties)))
 r <- raster(crs= proj4string(as(poly, "Spatial")), ext=raster::extent(as(poly, "Spatial")), resolution= 270)
 
