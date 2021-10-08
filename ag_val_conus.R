@@ -16,61 +16,45 @@ library(fasterize)
 #this is a projection I'm using from the wildlife pref repo
 albers <- "+proj=aea +lat_1=20 +lat_2=60 +lat_0=40 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs"
 
+#bring in counties
+counties <- tigris::counties()
+counties<-counties %>% filter(!STATEFP %in%  c("02", "60", "66", "69", "72", "78", "15"))
+counties<-st_transform(counties,st_crs(albers))
+st_crs(counties)
 
-#bring in states shapefile and filter to conus
-states <- read_sf("/Users/jamiefaselt/Resistance-Surfaces/Data/cb_2018_us_state_5m (1)/cb_2018_us_state_5m.shp")
-states <-  states%>% filter(!STATEFP %in%  c("02", "60", "66", "69", "72", "78", "15"))
-states<-st_transform(states,st_crs(albers))
-
-# bring in shapefile of US counties and filter to conus
-US.County <- read_sf("/Users/jamiefaselt/Resistance-Surfaces/Data/cb_2018_us_county_20m/cb_2018_us_county_20m.shp")
-#filter out AK , Guam, etc 
-US.County<-US.County %>% filter(!STATEFP %in%  c("02", "60", "66", "69", "72", "78", "15"))
-US.County<-st_transform(US.County,st_crs(albers))
-
-
-# make sure valid geometries and crs match
-st_is_valid(US.County) #true
-st_is_valid(states) #true
-st_crs(states)==st_crs(US.County) #true
-
-#left join to get state names added
-conuscounties <- st_join(US.County, states) #this has duplicates
-
-#drop duplicates
-us.counties <- distinct(conuscounties, COUNTYNS, .keep_all = TRUE) #this seems to have worked
 
 # make columns match to ag.val
-us.counties$NAME.y <- toupper(us.counties$NAME.y)
-us.counties$NAME.x <- toupper(us.counties$NAME.x)
-us.counties <- rename(us.counties, County = NAME.x)
-us.counties <- rename(us.counties, State = NAME.y)
+counties$NAME <- toupper(counties$NAME)
+counties <- rename(counties, State.ANSI = STATEFP)
+counties <- rename(counties, County.ANSI = COUNTYFP)
+counties$State.ANSI <- as.numeric(counties$State.ANSI)
+counties$County.ANSI <- as.numeric(counties$County.ANSI)
 
+
+#plot(counties) #checking and this doesn't have weird gaps yet
 # bring in ag val and make values a numeric variable
 agval <- read.csv("/Users/jamiefaselt/Resistance-Surfaces/Data/ag_val_conus.csv")
 agval$Value <- gsub(",","",agval$Value)
 agval$Value <- as.numeric(agval$Value)
 
 # join
-agval.join <- left_join(agval, us.counties)
-class(agval.join)
-agval.spatial <-  st_as_sf(agval.join, crs = crs(us.counties), agr = "constant")
-class(agval.spatial) #now it is an sf df
+agval.spatial <- left_join(counties, agval) #some reason getting more obs from this
 
 # double check projection
-st_crs(us.counties) == st_crs(agval.spatial) #true
-plot(agval.spatial)
+st_crs(counties) == st_crs(agval.spatial) #true
 
 #subset to relevant variables
 ag.val.sub <- agval.spatial %>% 
-  dplyr::select(geometry,Value,County,State)
-# str(ag.val.sub)
-plot(ag.val.sub) # this and regular agval.spat plot with gaps
+  dplyr::select(geometry,Value,County.ANSI,State.ANSI)
 
 #create temp raster to make agval a raster
-poly <- st_as_sfc(st_bbox(c(xmin = st_bbox(us.counties)[[1]], xmax = st_bbox(us.counties)[[3]], ymax = st_bbox(us.counties)[[4]], ymin = st_bbox(us.counties)[[2]]), crs = st_crs(us.counties)))
+poly <- st_as_sfc(st_bbox(c(xmin = st_bbox(counties)[[1]], xmax = st_bbox(counties)[[3]], ymax = st_bbox(counties)[[4]], ymin = st_bbox(counties)[[2]]), crs = st_crs(counties)))
 r <- raster(crs= proj4string(as(poly, "Spatial")), ext=raster::extent(as(poly, "Spatial")), resolution= 270)
 
 rstr<<-fasterize::fasterize(ag.val.sub, r, field = 'Value')
 
-plot(rstr) #wellp
+plot(rstr) 
+
+st_write(ag.val.sub,"ag_land_value.shp", overwrite=TRUE)
+writeRaster(rstr, "2017_ag_land_val.tif", overwrite=TRUE)
+
