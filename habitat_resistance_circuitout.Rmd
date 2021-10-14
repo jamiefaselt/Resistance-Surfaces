@@ -1,0 +1,168 @@
+---
+title: "EVI Resistance Layer"
+author: "Jamie Faselt"
+date: "7/8/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(fasterize)
+library(raster)
+library(sp)
+library(sf)
+library(rgeos)
+library(rgdal)
+library(tidyverse)
+library(tigris)
+library(dplyr)
+```
+
+# What are we connecting?
+
+Any connectivity modeling exercise begins with deciding what (or where) we are hoping to connect. This can be (and often is) protected areas, suitable (or "good") habitat, known home ranges, etc. In the context of circuit theory, we might call these the 'nodes' or the 'vertices' of the graph. They comprise the portion of the network we are interested in connecting. In order to make this exercise computationally efficient, we'll use GAP1 status protected areas in Wyoming (US) that are larger than 50000 ac (~20000 ha). We'll load those here:
+
+```{r loadpas}
+# load the nodes
+mt_reservations <- st_read("/Users/jamiefaselt/Research/Data/MontanaReservations_shp 3/MontanaReservations.shp")
+mt_fws <- st_read("/Users/jamiefaselt/Research/Data//MT Data/MT_FWS.shp")
+mt_CMR <- mt_fws %>% 
+  filter(., ORGNAME=="CHARLES M. RUSSELL NATIONAL WILDLIFE REFUGE",  drop=TRUE)
+
+mt_NPS <- st_read("/Users/jamiefaselt/Research/Data/NationalParkServiceAdminBoundaries_shp 2")
+
+### need to go back and combine all of these polygons into one then create buffer on southern border then make this my extent/resolution raster to match my future rasters to (new on 10.13)
+
+
+#make sure all the proejctions are the same
+st_crs(mt_reservations) #  ID["EPSG",4326]]
+st_crs(mt_CMR) # ID EPSG",4269
+st_crs(mt_NPS) # ID["EPSG",32100]]
+
+# bring in the habitat suitability layer
+hsi <- raster("hsiresist540.tif")
+plot(hsi)
+
+states <- tigris::states()
+mt <- states %>% filter(., NAME=="Montana", drop=TRUE)
+plot(mt) # I won't actually be cropping to Montana because I need to add the southern buffer for the Yellowstone herd
+
+hsi.proj <- st_transform(mt, crs(hsi))
+hsi.crop <- crop(hsi, as(hsi.proj, "Spatial"))r
+hsi.mask <- mask(hsi.crop, as(hsi.proj, "Spatial"))
+
+#match them all to your raster
+cmr <- st_transform(mt_CMR, crs(hsi.mask))
+nps <- st_transform(mt_NPS, crs(hsi.mask))
+reservations <- st_transform(mt_reservations, crs(hsi.mask))
+
+res(hsi)
+```
+
+There are several additional considerations for how we want to represent these in the network:
+1. We can use the entirety of the "patch"
+2. We can use the centroid of the "patch"
+3. We can choose random points within the "patches"
+
+*make sure that all the projections are the same 
+
+We'll do that here:
+```{r nodeassign}
+#before the centroids make one polygon of 
+node.SF.rez <- st_centroid(reservations)
+node.SF.cmr <- st_centroid(cmr)
+node.SF.nps <- st_centroid(nps)
+
+```
+
+# What are the impediments? 
+Resistance surfaces depict the degree of difficulty (and/or likelihood of mortality) an animal experiences moving across the landscape. This difficulty might simply be a function of Euclidean distance or may be a complex set of interactions between a variety of biophysical and social factors. For simplicity's sake, we are only going to consider two elements here: slope and human modification.
+
+We are using a habitat suitability model for bison in Montana
+
+
+## A brief note about functional form
+resistance is linearlly scaled... these exp functions make decisions about how rapidly the resistance changes... 
+``` {r funcform}
+sim.res <- rnorm(1000)
+lin.res <- sim.res
+exp.up <- exp(sim.res)
+exp.dn <- exp(-sim.res)
+
+```
+
+combine the centroids into one shapefil
+```{r}
+reznode <- subset(node.SF.rez, select=c(geometry, NAME))
+cmrnode <- subset(node.SF.cmr, select=c(geometry, ORGNAME))
+npsnode <- subset(node.SF.nps, select=c(geometry, UNIT_NAME))
+
+npsnode <- npsnode %>%
+  rename(NAME = UNIT_NAME)
+
+cmrnode <- cmrnode %>% 
+  rename(NAME = ORGNAME)
+
+all.nodes <- bind_rows(reznode, cmrnode, npsnode)
+```
+
+
+In order to use these data in Circuitscape (or Omniscape), we need to convert these points into categorical rasters. 
+
+Everything in flat ascii file... makes it easier (all still graph theory)
+
+cut all of this becaues it messed things up
+mt_reservations$ID <- seq(1, nrow(mt_reservations))
+node.SF.rez$ID <- seq(1, nrow(mt_reservations)) 
+mt_CMR$ID <- seq(1, nrow(mt_CMR))
+node.SF.cmr$ID <- seq(1, nrow(mt_CMR)) 
+mt_NPS$ID <- seq(1, nrow(mt_NPS))
+node.SF.nps$ID <- seq(1, nrow(mt_NPS)) 
+
+This also didn't work...
+node.SF.rez <- fasterize::fasterize(node.SF.rez, hsi, field = "ID")
+cent.based.node <- fasterize::fasterize(node.cent, hm, field = "ID")
+cent.based.node <- fasterize::fasterize(node.cent, hm, field = "ID")
+
+
+this worked but i cut it
+
+reservations$ID <- seq(1, nrow(reservations))
+node.SF.rez$ID <- seq(1, nrow(reservations)) 
+node.SF.rez <- node.SF.rez %>% st_buffer(., 10000) # buffer of 10 km
+node.rez <- fasterize::fasterize(node.SF.rez, hsi.mask, field = "ID")
+
+cmr$ID <- seq(1, nrow(cmr))
+node.SF.cmr$ID <- seq(1, nrow(cmr)) 
+node.SF.cmr <- node.SF.cmr %>% st_buffer(., 10000) # buffer of 10 km
+node.cmr <- fasterize::fasterize(node.SF.cmr, hsi.mask, field = "ID")
+
+nps$ID <- seq(1, nrow(nps))
+node.SF.nps$ID <- seq(1, nrow(nps)) 
+node.SF.nps <- node.SF.nps %>% st_buffer(., 10000) # buffer of 10 km
+node.nps <- fasterize::fasterize(node.SF.nps, hsi.mask, field = "ID")
+
+```{r catrast}
+
+all.nodes$ID <- seq(1, nrow(all.nodes))
+all.nodes <- all.nodes %>% st_buffer(., 10000) # buffer of 10 km
+all.nodes.rast <- fasterize::fasterize(all.nodes, hsi.mask, field = "ID")
+
+all.nodes.match<-resample(all.nodes.rast, resist.1, method="bilinear")
+
+resist.1 <- (hsi.mask)
+plot(hsi.mask)
+plot(all.nodes.rast)
+extent(all.nodes.rast)
+extent(hsi.mask)
+
+writeRaster(all.nodes.match, filename = "buffalonodematch.tif")
+writeRaster(all.nodes.rast, "/buffnode.tif")
+
+writeRaster(resist.1, filename = "540hsiresist.tif")
+
+proto.currentmap <- raster("circuitscape output1/hsiresistproto_cum_curmap.asc")
+
+logmap <- log(proto.currentmap)
+plot(logmap)
+```
